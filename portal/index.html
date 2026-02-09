@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Service Portal</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f0f2f5;
+    color: #333;
+    min-height: 100vh;
+    padding: 2rem 1rem;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 1.8rem;
+    margin-bottom: 0.5rem;
+    color: #1a1a2e;
+  }
+
+  .subtitle {
+    text-align: center;
+    color: #666;
+    margin-bottom: 2rem;
+    font-size: 0.95rem;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.2rem;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+
+  .card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 1.5rem;
+    text-decoration: none;
+    color: inherit;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    transition: transform 0.15s, box-shadow 0.15s;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+  }
+
+  .card-icon {
+    font-size: 1.6rem;
+    width: 2.4rem;
+    height: 2.4rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+
+  .card-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+
+  .card-desc {
+    font-size: 0.88rem;
+    color: #666;
+    line-height: 1.4;
+  }
+
+  .card-url {
+    font-size: 0.8rem;
+    color: #999;
+    font-family: monospace;
+    margin-top: auto;
+  }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    vertical-align: middle;
+    margin-left: 0.4rem;
+  }
+
+  .badge-https { background: #d4edda; color: #155724; }
+  .badge-http  { background: #fff3cd; color: #856404; }
+
+  /* Per-service accent colors */
+  .card-ttn  .card-icon { background: #e8f0fe; color: #1a73e8; }
+  .card-grafana .card-icon { background: #fce4ec; color: #e65100; }
+  .card-prometheus .card-icon { background: #fff3e0; color: #e65100; }
+  .card-kajima .card-icon { background: #e0f2f1; color: #00796b; }
+
+  @media (max-width: 600px) {
+    body { padding: 1rem 0.5rem; }
+    h1 { font-size: 1.4rem; }
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Service Portal</h1>
+<p class="subtitle">各サービスへのリンク一覧</p>
+
+<div class="grid" id="grid"></div>
+
+<script>
+(function () {
+  var host = window.location.hostname;
+
+  var services = [
+    {
+      name: "TTN Console",
+      desc: "The Things Network コンソール — デバイス・ゲートウェイ管理",
+      icon: "📡",
+      proto: "https",
+      port: 443,
+      cls: "card-ttn"
+    },
+    {
+      name: "Grafana",
+      desc: "ダッシュボード・可視化ツール",
+      icon: "📊",
+      proto: "http",
+      port: 3000,
+      cls: "card-grafana"
+    },
+    {
+      name: "Prometheus",
+      desc: "メトリクス収集・監視システム",
+      icon: "🔥",
+      proto: "http",
+      port: 9090,
+      cls: "card-prometheus"
+    },
+    {
+      name: "Kajima Bus Webapp",
+      desc: "鹿島バス Webアプリケーション",
+      icon: "🚌",
+      proto: "https",
+      port: 8443,
+      cls: "card-kajima"
+    }
+  ];
+
+  var grid = document.getElementById("grid");
+
+  services.forEach(function (s) {
+    var url = s.proto + "://" + host + (s.port === 443 || s.port === 80 ? "" : ":" + s.port);
+    var badgeClass = s.proto === "https" ? "badge-https" : "badge-http";
+
+    var a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.className = "card " + s.cls;
+
+    a.innerHTML =
+      '<div class="card-header">' +
+        '<span class="card-icon">' + s.icon + '</span>' +
+        '<span class="card-name">' + s.name +
+          '<span class="badge ' + badgeClass + '">' + s.proto + '</span>' +
+        '</span>' +
+      '</div>' +
+      '<span class="card-desc">' + s.desc + '</span>' +
+      '<span class="card-url">' + url + '</span>';
+
+    grid.appendChild(a);
+  });
+})();
+</script>
+
+</body>
+</html>
