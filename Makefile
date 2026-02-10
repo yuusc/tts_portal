@@ -1,5 +1,5 @@
 # Repositories
-LOCAL_TTN_REPO   := git@github.com:yuusc/local_TTN.git
+LOCAL_TTN_REPO   := yuusc/local_TTN
 KAJIMA_BUS_REPO  := yuusc/kajima_bus_webapp
 
 LOCAL_TTN_DIR := local_TTN
@@ -121,7 +121,7 @@ check-gh:
 clone: $(LOCAL_TTN_DIR) $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN)
 
 $(LOCAL_TTN_DIR):
-	git clone $(LOCAL_TTN_REPO)
+	gh repo clone $(LOCAL_TTN_REPO)
 
 $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN): check-gh
 	mkdir -p $(KAJIMA_BUS_DIR)
