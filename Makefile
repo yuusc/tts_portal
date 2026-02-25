@@ -238,10 +238,12 @@ endif
 copy-certs: loraserver
 ifeq ($(BACKEND),chirpstack)
 	@echo ">>> ChirpStack: 自己署名証明書を生成します..."
-	openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+		-days 365 -nodes \
 		-keyout $(KAJIMA_BUS_DIR)/key.pem \
 		-out $(KAJIMA_BUS_DIR)/cert.pem \
-		-subj "/CN=localhost"
+		-subj "/CN=kajima-bus" \
+		-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:$(HOST_IP)"
 	@echo ">>> cert.pem / key.pem を生成しました。"
 else
 	cp $(LOCAL_TTN_DIR)/certs/cert.pem $(KAJIMA_BUS_DIR)/cert.pem
