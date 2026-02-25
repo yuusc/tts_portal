@@ -25,9 +25,27 @@
   .subtitle {
     text-align: center;
     color: #666;
-    margin-bottom: 2rem;
+    margin-bottom: 0.6rem;
     font-size: 0.95rem;
   }
+
+  .backend-badge {
+    text-align: center;
+    margin-bottom: 2rem;
+  }
+
+  .backend-badge span {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .backend-ttn        { background: #e8f0fe; color: #1a73e8; }
+  .backend-chirpstack { background: #ede7f6; color: #5e35b1; }
 
   .grid {
     display: grid;
@@ -104,11 +122,13 @@
   .badge-https { background: #d4edda; color: #155724; }
   .badge-http  { background: #fff3cd; color: #856404; }
 
-  /* Per-service accent colors */
-  .card-ttn  .card-icon { background: #e8f0fe; color: #1a73e8; }
-  .card-grafana .card-icon { background: #fce4ec; color: #e65100; }
+  .card-ttn        .card-icon { background: #e8f0fe; color: #1a73e8; }
+  .card-chirpstack .card-icon { background: #ede7f6; color: #5e35b1; }
+  .card-grafana    .card-icon { background: #fce4ec; color: #c62828; }
   .card-prometheus .card-icon { background: #fff3e0; color: #e65100; }
-  .card-kajima .card-icon { background: #e0f2f1; color: #00796b; }
+  .card-kajima     .card-icon { background: #e0f2f1; color: #00796b; }
+  .card-restapi    .card-icon { background: #f3e5f5; color: #7b1fa2; }
+  .card-mqtt       .card-icon { background: #e8f5e9; color: #2e7d32; }
 
   @media (max-width: 600px) {
     body { padding: 1rem 0.5rem; }
@@ -121,59 +141,118 @@
 
 <h1>Service Portal</h1>
 <p class="subtitle">各サービスへのリンク一覧</p>
+<div class="backend-badge"><span id="backendLabel"></span></div>
 
 <div class="grid" id="grid"></div>
 
+<script src="config.js"></script>
 <script>
 (function () {
+  var backend = (typeof BACKEND !== 'undefined') ? BACKEND : 'unknown';
   var host = window.location.hostname;
 
-  var services = [
-    {
-      name: "TTN Console",
-      desc: "The Things Network コンソール — デバイス・ゲートウェイ管理",
-      icon: "📡",
-      proto: "https",
-      port: 443,
-      cls: "card-ttn"
-    },
-    {
-      name: "Grafana",
-      desc: "ダッシュボード・可視化ツール",
-      icon: "📊",
-      proto: "http",
-      port: 3000,
-      cls: "card-grafana"
-    },
-    {
-      name: "Prometheus",
-      desc: "メトリクス収集・監視システム",
-      icon: "🔥",
-      proto: "http",
-      port: 9090,
-      cls: "card-prometheus"
-    },
-    {
-      name: "Kajima Bus Webapp",
-      desc: "鹿島バス Webアプリケーション",
-      icon: "🚌",
-      proto: "https",
-      port: 8443,
-      cls: "card-kajima"
-    }
-  ];
+  var label = document.getElementById('backendLabel');
+  if (backend === 'chirpstack') {
+    label.textContent = 'ChirpStack';
+    label.className = 'backend-chirpstack';
+  } else if (backend === 'ttn') {
+    label.textContent = 'TTN Stack';
+    label.className = 'backend-ttn';
+  } else {
+    label.textContent = 'Backend 不明';
+  }
 
-  var grid = document.getElementById("grid");
+  var servicesByBackend = {
+    ttn: [
+      {
+        name: "TTN Console",
+        desc: "The Things Network コンソール — デバイス・ゲートウェイ管理",
+        icon: "📡",
+        proto: "https",
+        port: 443,
+        cls: "card-ttn"
+      },
+      {
+        name: "Grafana",
+        desc: "ダッシュボード・可視化ツール",
+        icon: "📊",
+        proto: "http",
+        port: 3000,
+        cls: "card-grafana"
+      },
+      {
+        name: "Prometheus",
+        desc: "メトリクス収集・監視システム",
+        icon: "🔥",
+        proto: "http",
+        port: 9090,
+        cls: "card-prometheus"
+      },
+      {
+        name: "Kajima Bus Webapp",
+        desc: "鹿島バス Webアプリケーション",
+        icon: "🚌",
+        proto: "https",
+        port: 8443,
+        cls: "card-kajima"
+      }
+    ],
+    chirpstack: [
+      {
+        name: "ChirpStack",
+        desc: "ChirpStack LoRaWAN Network Server — デバイス・ゲートウェイ管理",
+        icon: "📡",
+        proto: "http",
+        port: 8080,
+        cls: "card-chirpstack"
+      },
+      {
+        name: "ChirpStack REST API",
+        desc: "ChirpStack REST API UI (gRPC-gateway)",
+        icon: "🔌",
+        proto: "http",
+        port: 8090,
+        cls: "card-restapi"
+      },
+      {
+        name: "Grafana",
+        desc: "ダッシュボード・可視化ツール",
+        icon: "📊",
+        proto: "http",
+        port: 3000,
+        cls: "card-grafana"
+      },
+      {
+        name: "Prometheus",
+        desc: "メトリクス収集・監視システム",
+        icon: "🔥",
+        proto: "http",
+        port: 9090,
+        cls: "card-prometheus"
+      },
+      {
+        name: "Kajima Bus Webapp",
+        desc: "鹿島バス Webアプリケーション",
+        icon: "🚌",
+        proto: "https",
+        port: 8443,
+        cls: "card-kajima"
+      }
+    ]
+  };
+
+  var services = servicesByBackend[backend] || [];
+  var grid = document.getElementById('grid');
 
   services.forEach(function (s) {
-    var url = s.proto + "://" + host + (s.port === 443 || s.port === 80 ? "" : ":" + s.port);
-    var badgeClass = s.proto === "https" ? "badge-https" : "badge-http";
+    var url = s.proto + '://' + host + (s.port === 443 || s.port === 80 ? '' : ':' + s.port);
+    var badgeClass = s.proto === 'https' ? 'badge-https' : 'badge-http';
 
-    var a = document.createElement("a");
+    var a = document.createElement('a');
     a.href = url;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    a.className = "card " + s.cls;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.className = 'card ' + s.cls;
 
     a.innerHTML =
       '<div class="card-header">' +

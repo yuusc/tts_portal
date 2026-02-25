@@ -1,9 +1,30 @@
 # Repositories
-LOCAL_TTN_REPO   := yuusc/local_TTN
-KAJIMA_BUS_REPO  := yuusc/kajima_bus_webapp
+LOCAL_TTN_REPO        := git@github.com:yuusc/local_TTN.git
+LOCAL_CHIRPSTACK_REPO := yuusc/local_ChirpStack
+KAJIMA_BUS_REPO       := yuusc/kajima_bus_webapp
 
-LOCAL_TTN_DIR := local_TTN
-KAJIMA_BUS_DIR := kajima_bus_webapp
+LOCAL_TTN_DIR        := local_TTN
+LOCAL_CHIRPSTACK_DIR := local_ChirpStack
+KAJIMA_BUS_DIR       := kajima_bus_webapp
+
+# Backend selection: saved in .backend after clone, override with BACKEND=chirpstack
+BACKEND_FILE := .backend
+-include $(BACKEND_FILE)
+BACKEND ?= ttn
+
+ifeq ($(BACKEND),chirpstack)
+  LORA_DIR    := $(LOCAL_CHIRPSTACK_DIR)
+  LORA_LABEL  := ChirpStack
+  LORA_UP     := docker compose -f $(LOCAL_CHIRPSTACK_DIR)/docker-compose.yml up -d
+  LORA_DOWN   := docker compose -f $(LOCAL_CHIRPSTACK_DIR)/docker-compose.yml down
+  LORA_STATUS := docker compose -f $(LOCAL_CHIRPSTACK_DIR)/docker-compose.yml ps
+else
+  LORA_DIR    := $(LOCAL_TTN_DIR)
+  LORA_LABEL  := TTN Stack
+  LORA_UP     := $(MAKE) -C $(LOCAL_TTN_DIR) up
+  LORA_DOWN   := $(MAKE) -C $(LOCAL_TTN_DIR) down
+  LORA_STATUS := $(MAKE) -C $(LOCAL_TTN_DIR) status
+endif
 
 # Paths (absolute)
 ROOT_DIR       := $(shell pwd)
@@ -11,14 +32,75 @@ KAJIMA_BUS_ABS := $(ROOT_DIR)/$(KAJIMA_BUS_DIR)
 KAJIMA_BIN     := kajima_bus_app
 SERVICE_NAME   := kajima-bus-webapp
 
+# Architecture: amd64 or arm64 (auto-detected, override with ARCH=arm64)
+ARCH ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+KAJIMA_ZIP_PATTERN := $(KAJIMA_BIN)_*_linux_$(ARCH).zip
+
 # Portal
 PORTAL_DIR     := $(ROOT_DIR)/portal
 PORTAL_SERVICE := portal
 
-.PHONY: all clone build clean local_ttn kajima_bus copy-certs pull \
+# Host IP address (auto-detected)
+HOST_IP := $(shell hostname -I | awk '{print $$1}')
+
+# tiles.zip: opt-in download (default: off)
+# Usage: make TILES=1 clone
+TILES ?= 0
+
+define download_tiles
+	@if [ "$(TILES)" = "1" ]; then \
+		echo ">>> tiles.zip をダウンロード中..."; \
+		mkdir -p $(KAJIMA_BUS_DIR)/static/tiles; \
+		gh release download --repo $(KAJIMA_BUS_REPO) --pattern 'tiles.zip' -D $(KAJIMA_BUS_DIR) --clobber; \
+		mv $(KAJIMA_BUS_DIR)/tiles.zip $(KAJIMA_BUS_DIR)/static/tiles/tiles.zip; \
+		cd $(KAJIMA_BUS_DIR)/static/tiles && unzip -o tiles.zip && rm -f tiles.zip; \
+		echo ">>> tiles を static/ に展開しました。"; \
+	fi
+endef
+
+.PHONY: all clone build clean local_ttn local_chirpstack loraserver kajima_bus copy-certs pull \
         start stop restart status install-service uninstall-service \
         install-portal-service uninstall-portal-service \
-        check-gh check-docker download-webapp update-webapp
+        check-gh check-docker download-webapp update-webapp help
+.DEFAULT_GOAL := help
+
+help:
+	@echo ""
+	@echo "使い方: make [ターゲット] [BACKEND=ttn|chirpstack] [ARCH=amd64|arm64]"
+	@echo ""
+	@echo "  BACKEND=ttn         TTN (The Things Network) を使用 (デフォルト)"
+	@echo "  BACKEND=chirpstack  ChirpStack を使用"
+	@echo "  ARCH=amd64          x86_64 向けバイナリを使用 (デフォルト: 自動検出)"
+	@echo "  ARCH=arm64          ARM64 向けバイナリを使用"
+	@echo ""
+	@echo "現在の設定:"
+	@echo "  BACKEND    = $(BACKEND)"
+	@echo "  LORA_DIR   = $(LORA_DIR)"
+	@echo "  ARCH       = $(ARCH)"
+	@echo "  ZIP        = $(KAJIMA_ZIP_PATTERN)"
+	@echo "  TILES      = $(TILES)  (1: tiles.zip もダウンロード、0: スキップ)"
+	@echo ""
+	@echo "主要ターゲット:"
+	@echo "  all           クローン・ビルド・起動をまとめて実行"
+	@echo "  clone         リポジトリのクローンとバイナリのダウンロード"
+	@echo "  build         LoRaサーバーと Webアプリのビルド"
+	@echo "  start         全サービスを起動"
+	@echo "  stop          全サービスを停止"
+	@echo "  restart       全サービスを再起動"
+	@echo "  status        全サービスのステータスを表示"
+	@echo "  pull          リポジトリとバイナリを最新に更新"
+	@echo "  update-webapp Webアプリバイナリのみ最新に更新"
+	@echo "  clean         全サービス停止・systemd解除・ディレクトリ削除"
+	@echo ""
+	@echo "例:"
+	@echo "  make all                              # TTN + 自動検出アーキテクチャで全セットアップ"
+	@echo "  make ARCH=arm64 all                   # ARM64向けバイナリで全セットアップ"
+	@echo "  make BACKEND=chirpstack all           # ChirpStackで全セットアップ"
+	@echo "  make BACKEND=chirpstack ARCH=arm64 all"
+	@echo "  make update-webapp                    # Webアプリのみ最新化"
+	@echo "  make TILES=1 clone                    # tiles.zip も含めてダウンロード"
+	@echo "  make TILES=1 update-webapp            # tiles.zip も含めて更新"
+	@echo ""
 
 all: clone build start
 
@@ -112,55 +194,117 @@ check-gh:
 		echo "  以下を確認してください:"; \
 		echo "    1. リポジトリにリリースが作成されているか"; \
 		echo "       確認: gh release list --repo $(KAJIMA_BUS_REPO)"; \
-		echo "    2. リリースに '$(KAJIMA_BIN)' バイナリがアップロードされているか"; \
+		echo "    2. リリースに 'kajima_bus_app_*_linux_$(ARCH).zip' がアップロードされているか"; \
 		echo ""; \
 		exit 1; \
 	}
 
 # ===== Clone / Download =====
-clone: $(LOCAL_TTN_DIR) $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN)
+clone: $(LORA_DIR) $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN)
 
 $(LOCAL_TTN_DIR):
-	gh repo clone $(LOCAL_TTN_REPO)
+	git clone $(LOCAL_TTN_REPO)
+	@echo "BACKEND := ttn" > $(BACKEND_FILE)
+	@echo "var BACKEND = 'ttn';" > $(PORTAL_DIR)/config.js
+
+$(LOCAL_CHIRPSTACK_DIR): check-gh
+	@[ -d $@ ] || gh repo clone $(LOCAL_CHIRPSTACK_REPO)
+	@echo "BACKEND := chirpstack" > $(BACKEND_FILE)
+	@echo "var BACKEND = 'chirpstack';" > $(PORTAL_DIR)/config.js
 
 $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN): check-gh
 	mkdir -p $(KAJIMA_BUS_DIR)
-	gh release download --repo $(KAJIMA_BUS_REPO) --pattern '$(KAJIMA_BIN)' -D $(KAJIMA_BUS_DIR) --clobber
+	gh release download --repo $(KAJIMA_BUS_REPO) --pattern '$(KAJIMA_ZIP_PATTERN)' -D $(KAJIMA_BUS_DIR) --clobber
+	cd $(KAJIMA_BUS_DIR) && unzip -o $(KAJIMA_ZIP_PATTERN) && rm -f $(KAJIMA_ZIP_PATTERN)
 	chmod +x $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN)
+	$(download_tiles)
 
 # ===== Build =====
-build: local_ttn kajima_bus
+build: loraserver kajima_bus
 
 local_ttn: check-docker $(LOCAL_TTN_DIR)
 	$(MAKE) -C $(LOCAL_TTN_DIR) init
 
-copy-certs: local_ttn
+local_chirpstack: check-docker $(LOCAL_CHIRPSTACK_DIR)
+	@echo ">>> ChirpStack: クローン済み。docker compose up で起動します。"
+
+loraserver:
+ifeq ($(BACKEND),chirpstack)
+	$(MAKE) local_chirpstack
+else
+	$(MAKE) local_ttn
+endif
+
+copy-certs: loraserver
+ifeq ($(BACKEND),chirpstack)
+	@echo ">>> ChirpStack: 自己署名証明書を生成します..."
+	openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+		-keyout $(KAJIMA_BUS_DIR)/key.pem \
+		-out $(KAJIMA_BUS_DIR)/cert.pem \
+		-subj "/CN=localhost"
+	@echo ">>> cert.pem / key.pem を生成しました。"
+else
 	cp $(LOCAL_TTN_DIR)/certs/cert.pem $(KAJIMA_BUS_DIR)/cert.pem
 	cp $(LOCAL_TTN_DIR)/certs/key.pem $(KAJIMA_BUS_DIR)/key.pem
+endif
 
 kajima_bus: $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN) copy-certs
 
 # ===== Start / Stop =====
 start: check-docker install-service install-portal-service
-	$(MAKE) -C $(LOCAL_TTN_DIR) up
+	@[ -d $(LORA_DIR) ] || { \
+		echo ""; \
+		echo "=== Error: $(LORA_DIR) が見つかりません ==="; \
+		echo ""; \
+		echo "  先に以下を実行してください:"; \
+		echo "    make clone  (BACKEND=$(BACKEND) の場合)"; \
+		echo ""; \
+		exit 1; \
+	}
+	$(LORA_UP)
 	sudo systemctl start $(SERVICE_NAME)
 	sudo systemctl start $(PORTAL_SERVICE)
 	@echo ""
-	@echo "=== All services started ==="
-	@echo "  TTN Stack  : make -C $(LOCAL_TTN_DIR) logs"
-	@echo "  Webapp     : sudo journalctl -u $(SERVICE_NAME) -f"
-	@echo "  Portal     : sudo journalctl -u $(PORTAL_SERVICE) -f"
+	@echo "============================================"
+	@echo " サービス一覧"
+	@echo "============================================"
+	@echo " [Portal]"
+	@echo "   http://$(HOST_IP):8000"
+	@echo ""
+	@echo " [Kajima Bus Webapp]"
+	@echo "   https://$(HOST_IP):8443"
+	@echo ""
+ifeq ($(BACKEND),chirpstack)
+	@echo " [ChirpStack]"
+	@echo "   UI          : http://$(HOST_IP):8080"
+	@echo "   REST API    : http://$(HOST_IP):8090"
+	@echo "   Grafana     : http://$(HOST_IP):3000"
+	@echo "   Prometheus  : http://$(HOST_IP):9090"
+	@echo "   MQTT        : $(HOST_IP):1883"
+	@echo "   GW Bridge (UDP)         : $(HOST_IP):1700/udp"
+	@echo "   GW Bridge (HTTP)        : $(HOST_IP):8070"
+	@echo "   GW Bridge (BasicStation): $(HOST_IP):3001"
+else
+	@echo " [TTN Stack]"
+	@echo "   詳細: make -C $(LOCAL_TTN_DIR) logs"
+endif
+	@echo "============================================"
+	@echo ""
+	@echo " ログ確認:"
+	@echo "   Webapp : sudo journalctl -u $(SERVICE_NAME) -f"
+	@echo "   Portal : sudo journalctl -u $(PORTAL_SERVICE) -f"
+	@echo "============================================"
 	@echo ""
 
 stop:
 	sudo systemctl stop $(PORTAL_SERVICE) || true
 	sudo systemctl stop $(SERVICE_NAME) || true
-	$(MAKE) -C $(LOCAL_TTN_DIR) down
+	@[ -d $(LORA_DIR) ] && $(LORA_DOWN) || true
 
 restart: stop start
 
 status:
-	$(MAKE) -C $(LOCAL_TTN_DIR) status
+	@[ -d $(LORA_DIR) ] && $(LORA_STATUS) || true
 	@echo ""
 	sudo systemctl status $(SERVICE_NAME) --no-pager
 	@echo ""
@@ -226,18 +370,24 @@ uninstall-portal-service:
 
 # ===== Update webapp binary =====
 update-webapp: check-gh
-	gh release download --repo $(KAJIMA_BUS_REPO) --pattern '$(KAJIMA_BIN)' -D $(KAJIMA_BUS_DIR) --clobber
+	gh release download --repo $(KAJIMA_BUS_REPO) --pattern '$(KAJIMA_ZIP_PATTERN)' -D $(KAJIMA_BUS_DIR) --clobber
+	cd $(KAJIMA_BUS_DIR) && unzip -o $(KAJIMA_ZIP_PATTERN) && rm -f $(KAJIMA_ZIP_PATTERN)
 	chmod +x $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN)
-	@echo ">>> $(KAJIMA_BIN) updated to latest release."
+	$(download_tiles)
+	@echo ">>> $(KAJIMA_BIN) ($(ARCH)) updated to latest release."
 
 # ===== Pull =====
-pull: $(LOCAL_TTN_DIR) check-gh
-	cd $(LOCAL_TTN_DIR) && git pull
-	gh release download --repo $(KAJIMA_BUS_REPO) --pattern '$(KAJIMA_BIN)' -D $(KAJIMA_BUS_DIR) --clobber
+pull: $(LORA_DIR) check-gh
+	cd $(LORA_DIR) && git pull
+	gh release download --repo $(KAJIMA_BUS_REPO) --pattern '$(KAJIMA_ZIP_PATTERN)' -D $(KAJIMA_BUS_DIR) --clobber
+	cd $(KAJIMA_BUS_DIR) && unzip -o $(KAJIMA_ZIP_PATTERN) && rm -f $(KAJIMA_ZIP_PATTERN)
 	chmod +x $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN)
-	@echo ">>> $(KAJIMA_BIN) updated to latest release."
+	$(download_tiles)
+	@echo ">>> $(KAJIMA_BIN) ($(ARCH)) updated to latest release."
 
 # ===== Clean =====
 clean: stop uninstall-service uninstall-portal-service
-	$(MAKE) -C $(LOCAL_TTN_DIR) clean || true
-	sudo rm -rf $(LOCAL_TTN_DIR) $(KAJIMA_BUS_DIR)
+	@[ -d $(LOCAL_TTN_DIR) ] && $(MAKE) -C $(LOCAL_TTN_DIR) clean || true
+	@[ -d $(LOCAL_CHIRPSTACK_DIR) ] && $(MAKE) -C $(LOCAL_CHIRPSTACK_DIR) clean || true
+	sudo rm -rf $(LOCAL_TTN_DIR) $(LOCAL_CHIRPSTACK_DIR) $(KAJIMA_BUS_DIR)
+	rm -f $(BACKEND_FILE)
