@@ -36,6 +36,31 @@ SERVICE_NAME   := kajima-bus-webapp
 ARCH ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 KAJIMA_ZIP_PATTERN := $(KAJIMA_BIN)_*_linux_$(ARCH).zip
 
+# ===== ソースビルド (2026-09-18 追加) =====
+# 理由: bus-app は SQLite 利用のため CGO 必須で、arm64版リリース資産を作るには
+# ビルド側に aarch64-linux-gnu-gcc のクロスツールチェーンが要る。用意されていない
+# と arm64 版が存在せずラズパイでの取得に失敗する。また32bit OSでは uname -m が
+# armv7l を返し ARCH の変換規則に当てはまらない。現地でソースからビルドすれば
+# これらを回避できるため、SOURCE=1 で選べるようにする。
+# 未指定 (デフォルト0) の場合は従来通りリリースzipを取得する挙動のまま変わらない。
+SOURCE ?= 0
+KAJIMA_BUS_SRC_DIR := kajima_bus_webapp-src
+
+# kajima_bus_webapp/bus-app/go.mod が要求する Go バージョンのフォールバック値。
+# 実際には $(KAJIMA_BUS_SRC_DIR) クローン後に go.mod から動的に読み取る
+# (check-go 参照)。クローン前に check-go 単体を実行した場合などに使われる。
+REQUIRED_GO_VERSION := 1.25.6
+
+# 初期管理者の認証情報 (SOURCE=1 のときのみ bus-app 側の `make build` にそのまま
+# 渡す。bus-app 側で bcrypt ハッシュ化して ldflags 注入する)。未指定なら何も
+# 渡さず、bus-app 側の従来動作 (起動時にランダムパスワードを生成して表示) のまま。
+ADMIN_USER ?=
+ADMIN_PASS ?=
+
+# check-go で Go を /usr/local/go に導入した場合に備えて PATH に加えておく。
+# 未導入 (ディレクトリが存在しない) でも無害。
+export PATH := /usr/local/go/bin:$(PATH)
+
 # Portal
 PORTAL_DIR     := $(ROOT_DIR)/portal
 PORTAL_SERVICE := portal
@@ -61,17 +86,22 @@ endef
 .PHONY: all clone build clean local_ttn local_chirpstack loraserver kajima_bus copy-certs pull \
         start stop restart status install-service uninstall-service \
         install-portal-service uninstall-portal-service \
-        check-gh check-docker download-webapp update-webapp help
+        check-gh check-docker check-go download-webapp update-webapp help
 .DEFAULT_GOAL := help
 
 help:
 	@echo ""
-	@echo "使い方: make [ターゲット] [BACKEND=ttn|chirpstack] [ARCH=amd64|arm64]"
+	@echo "使い方: make [ターゲット] [BACKEND=ttn|chirpstack] [ARCH=amd64|arm64] [SOURCE=1] [ADMIN_USER=...] [ADMIN_PASS=...]"
 	@echo ""
 	@echo "  BACKEND=ttn         TTN (The Things Network) を使用 (デフォルト)"
 	@echo "  BACKEND=chirpstack  ChirpStack を使用"
 	@echo "  ARCH=amd64          x86_64 向けバイナリを使用 (デフォルト: 自動検出)"
 	@echo "  ARCH=arm64          ARM64 向けバイナリを使用"
+	@echo "  SOURCE=1            bus-app をリリースzipではなく現地でソースからビルド (デフォルト: 0)"
+	@echo "                      arm64版リリース資産が無い場合の回避にもなるため、ラズパイでの設置に推奨"
+	@echo "  ADMIN_USER=<name>   SOURCE=1 のとき、初期管理者ユーザー名を指定 (bus-appのmake buildへそのまま渡す)"
+	@echo "  ADMIN_PASS=<pass>   SOURCE=1 のとき、初期管理者パスワードを指定 (bus-appのmake buildへそのまま渡す)"
+	@echo "                      ※ ADMIN_PASS はシェル履歴や ps コマンドの出力に残ります。取り扱いに注意してください"
 	@echo ""
 	@echo "現在の設定:"
 	@echo "  BACKEND    = $(BACKEND)"
@@ -79,11 +109,13 @@ help:
 	@echo "  ARCH       = $(ARCH)"
 	@echo "  ZIP        = $(KAJIMA_ZIP_PATTERN)"
 	@echo "  TILES      = $(TILES)  (1: tiles.zip もダウンロード、0: スキップ)"
+	@echo "  SOURCE     = $(SOURCE)  (1: 現地ソースビルド、0: リリースzip取得)"
 	@echo ""
 	@echo "主要ターゲット:"
 	@echo "  all           クローン・ビルド・起動をまとめて実行"
-	@echo "  clone         リポジトリのクローンとバイナリのダウンロード"
+	@echo "  clone         リポジトリのクローンとバイナリのダウンロード (SOURCE=1ならソースを取得してビルド)"
 	@echo "  build         LoRaサーバーと Webアプリのビルド"
+	@echo "  check-go      Goツールチェインの確認・導入 (SOURCE=1利用時に必要)"
 	@echo "  start         全サービスを起動"
 	@echo "  stop          全サービスを停止"
 	@echo "  restart       全サービスを再起動"
@@ -100,6 +132,9 @@ help:
 	@echo "  make update-webapp                    # Webアプリのみ最新化"
 	@echo "  make TILES=1 clone                    # tiles.zip も含めてダウンロード"
 	@echo "  make TILES=1 update-webapp            # tiles.zip も含めて更新"
+	@echo "  make SOURCE=1 BACKEND=chirpstack all  # [ラズパイ推奨] 現地ソースビルドで全セットアップ"
+	@echo "  make SOURCE=1 ADMIN_USER=admin ADMIN_PASS=xxxx BACKEND=chirpstack all"
+	@echo "                                         # 初期管理者の認証情報を指定してソースビルド"
 	@echo ""
 
 all: clone build start
@@ -199,6 +234,66 @@ check-gh:
 		exit 1; \
 	}
 
+# check-go: SOURCE=1 (現地ソースビルド) 用の Go ツールチェイン確認・導入 (2026-09-18 追加)
+# $(KAJIMA_BUS_SRC_DIR)/bus-app/go.mod が要求する Go バージョン (無ければ
+# REQUIRED_GO_VERSION にフォールバック) を満たさない場合、go.dev の公式 tarball を
+# /usr/local/go に展開する。既存の /usr/local/go があれば削除せずタイムスタンプ付き
+# ディレクトリへ退避してから展開する (他ツールが依存している可能性があるため)。
+# CGO (mattn/go-sqlite3) のビルドに gcc が必須のため、有無もあわせて確認する。
+check-go:
+	@GO_MOD="$(KAJIMA_BUS_SRC_DIR)/bus-app/go.mod"; \
+	REQ_VER=""; \
+	if [ -f "$$GO_MOD" ]; then \
+		REQ_VER=$$(awk '/^go [0-9]/{print $$2; exit}' "$$GO_MOD"); \
+	fi; \
+	if [ -z "$$REQ_VER" ]; then REQ_VER="$(REQUIRED_GO_VERSION)"; fi; \
+	CUR_VER=""; \
+	if command -v go >/dev/null 2>&1; then \
+		CUR_VER=$$(go version 2>/dev/null | sed -n 's/^go version go\([0-9.]*\).*/\1/p'); \
+	fi; \
+	if [ -n "$$CUR_VER" ] && [ "$$(printf '%s\n%s\n' "$$REQ_VER" "$$CUR_VER" | sort -V | head -n1)" = "$$REQ_VER" ]; then \
+		echo ">>> Go $$CUR_VER を使用します (要件: $$REQ_VER 以上)"; \
+	else \
+		if [ -n "$$CUR_VER" ]; then \
+			echo ">>> 既存の Go $$CUR_VER は要件 (go.mod: $$REQ_VER 以上) を満たしません。導入します..."; \
+		else \
+			echo ">>> Go が見つかりません。Go $$REQ_VER を導入します..."; \
+		fi; \
+		if [ -d /usr/local/go ]; then \
+			BACKUP="/usr/local/go.bak-$$(date +%Y%m%d%H%M%S)"; \
+			echo ">>> 既存の /usr/local/go を $$BACKUP に退避します (削除はしません)"; \
+			sudo mv /usr/local/go "$$BACKUP" || exit 1; \
+		fi; \
+		GO_TARBALL="go$${REQ_VER}.linux-$(ARCH).tar.gz"; \
+		echo ">>> https://go.dev/dl/$$GO_TARBALL をダウンロード中..."; \
+		curl -fsSLO "https://go.dev/dl/$$GO_TARBALL" || { \
+			echo ""; \
+			echo "=== Error: Go tarball のダウンロードに失敗しました ($$GO_TARBALL) ==="; \
+			echo "  https://go.dev/dl/ でファイル名を確認してください。"; \
+			echo ""; \
+			exit 1; \
+		}; \
+		sudo tar -C /usr/local -xzf "$$GO_TARBALL" || { \
+			rm -f "$$GO_TARBALL"; \
+			echo "=== Error: /usr/local への展開に失敗しました ==="; \
+			exit 1; \
+		}; \
+		rm -f "$$GO_TARBALL"; \
+		echo ">>> Go $$REQ_VER を /usr/local/go に導入しました。"; \
+		echo "    このMakefile実行中は PATH に /usr/local/go/bin を自動で追加しています。"; \
+		echo "    対話シェルでも使う場合は ~/.bashrc 等に以下を追記してください:"; \
+		echo "      export PATH=\$$PATH:/usr/local/go/bin"; \
+	fi; \
+	command -v gcc >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "=== Error: gcc が見つかりません (bus-app は CGO 必須のためビルドできません) ==="; \
+		echo ""; \
+		echo "  インストール方法:"; \
+		echo "    sudo apt install build-essential"; \
+		echo ""; \
+		exit 1; \
+	}
+
 # ===== Clone / Download =====
 clone: $(LORA_DIR) $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN)
 
@@ -212,12 +307,41 @@ $(LOCAL_CHIRPSTACK_DIR): check-gh
 	@echo "BACKEND := chirpstack" > $(BACKEND_FILE)
 	@echo "var BACKEND = 'chirpstack';" > $(PORTAL_DIR)/config.js
 
+# kajima_bus_webapp のソース一式 (SOURCE=1 のときのみクローンされる)。
+# local_ChirpStack と同じ作法 (gh repo clone、無ければクローン) に合わせている (2026-09-18 追加)。
+$(KAJIMA_BUS_SRC_DIR): check-gh
+	@[ -d $@ ] || gh repo clone $(KAJIMA_BUS_REPO) $@
+
+# SOURCE=1 のとき、kajima_bus_webapp/bus-app を現地で `make build` してバイナリを
+# 作る。ADMIN_USER/ADMIN_PASS が指定されていればそのまま bus-app 側の make に渡し、
+# bcrypt ハッシュを ldflags 注入した初期管理者アカウント入りでビルドさせる
+# (未指定なら何も渡さず、bus-app 側の従来動作のまま)。
+# 生成物の配置は、従来のリリースzip展開先 ($(KAJIMA_BUS_DIR)/$(KAJIMA_BIN) 直下に
+# バイナリ、static/ templates/ も同階層) と揃え、install-service が参照する
+# WorkingDirectory/ExecStart と食い違わないようにしている (2026-09-18 追加)。
+define build_webapp_from_source
+	@echo ">>> ソースから $(KAJIMA_BIN) をビルドします (SOURCE=1)"; \
+	$(MAKE) -C $(KAJIMA_BUS_SRC_DIR)/bus-app build $(if $(ADMIN_USER),ADMIN_USER=$(ADMIN_USER)) $(if $(ADMIN_PASS),ADMIN_PASS=$(ADMIN_PASS)) && \
+	mkdir -p $(KAJIMA_BUS_DIR)/static $(KAJIMA_BUS_DIR)/templates && \
+	cp $(KAJIMA_BUS_SRC_DIR)/bus-app/$(KAJIMA_BIN) $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN) && \
+	chmod +x $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN) && \
+	cp -r $(KAJIMA_BUS_SRC_DIR)/bus-app/static/. $(KAJIMA_BUS_DIR)/static/ && \
+	cp -r $(KAJIMA_BUS_SRC_DIR)/bus-app/templates/. $(KAJIMA_BUS_DIR)/templates/ && \
+	echo ">>> ソースビルド完了: $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN)"
+	$(download_tiles)
+endef
+
+ifeq ($(SOURCE),1)
+$(KAJIMA_BUS_DIR)/$(KAJIMA_BIN): $(KAJIMA_BUS_SRC_DIR) check-go
+	$(build_webapp_from_source)
+else
 $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN): check-gh
 	mkdir -p $(KAJIMA_BUS_DIR)
 	gh release download --repo $(KAJIMA_BUS_REPO) --pattern '$(KAJIMA_ZIP_PATTERN)' -D $(KAJIMA_BUS_DIR) --clobber
 	cd $(KAJIMA_BUS_DIR) && unzip -o $(KAJIMA_ZIP_PATTERN) && rm -f $(KAJIMA_ZIP_PATTERN)
 	chmod +x $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN)
 	$(download_tiles)
+endif
 
 # ===== Build =====
 build: loraserver kajima_bus
@@ -371,14 +495,44 @@ uninstall-portal-service:
 	@echo ">>> $(PORTAL_SERVICE) removed."
 
 # ===== Update webapp binary =====
+# SOURCE=1 のときは、$(KAJIMA_BUS_SRC_DIR) が既にクローンされている前提で
+# git pull してから再ビルドする (未クローンならエラーで案内する) (2026-09-18 追加)。
+ifeq ($(SOURCE),1)
+update-webapp: check-go
+	@[ -d $(KAJIMA_BUS_SRC_DIR) ] || { \
+		echo ""; \
+		echo "=== Error: $(KAJIMA_BUS_SRC_DIR) が見つかりません ==="; \
+		echo "  先に 'make SOURCE=1 clone' を実行してください。"; \
+		echo ""; \
+		exit 1; \
+	}
+	cd $(KAJIMA_BUS_SRC_DIR) && git pull
+	$(build_webapp_from_source)
+	@echo ">>> $(KAJIMA_BIN) をソースから最新化しました。"
+else
 update-webapp: check-gh
 	gh release download --repo $(KAJIMA_BUS_REPO) --pattern '$(KAJIMA_ZIP_PATTERN)' -D $(KAJIMA_BUS_DIR) --clobber
 	cd $(KAJIMA_BUS_DIR) && unzip -o $(KAJIMA_ZIP_PATTERN) && rm -f $(KAJIMA_ZIP_PATTERN)
 	chmod +x $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN)
 	$(download_tiles)
 	@echo ">>> $(KAJIMA_BIN) ($(ARCH)) updated to latest release."
+endif
 
 # ===== Pull =====
+ifeq ($(SOURCE),1)
+pull: $(LORA_DIR) check-go
+	cd $(LORA_DIR) && git pull
+	@[ -d $(KAJIMA_BUS_SRC_DIR) ] || { \
+		echo ""; \
+		echo "=== Error: $(KAJIMA_BUS_SRC_DIR) が見つかりません ==="; \
+		echo "  先に 'make SOURCE=1 clone' を実行してください。"; \
+		echo ""; \
+		exit 1; \
+	}
+	cd $(KAJIMA_BUS_SRC_DIR) && git pull
+	$(build_webapp_from_source)
+	@echo ">>> $(KAJIMA_BIN) をソースから最新化しました。"
+else
 pull: $(LORA_DIR) check-gh
 	cd $(LORA_DIR) && git pull
 	gh release download --repo $(KAJIMA_BUS_REPO) --pattern '$(KAJIMA_ZIP_PATTERN)' -D $(KAJIMA_BUS_DIR) --clobber
@@ -386,10 +540,11 @@ pull: $(LORA_DIR) check-gh
 	chmod +x $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN)
 	$(download_tiles)
 	@echo ">>> $(KAJIMA_BIN) ($(ARCH)) updated to latest release."
+endif
 
 # ===== Clean =====
 clean: stop uninstall-service uninstall-portal-service
 	@[ -d $(LOCAL_TTN_DIR) ] && $(MAKE) -C $(LOCAL_TTN_DIR) clean || true
 	@[ -d $(LOCAL_CHIRPSTACK_DIR) ] && $(MAKE) -C $(LOCAL_CHIRPSTACK_DIR) clean || true
-	sudo rm -rf $(LOCAL_TTN_DIR) $(LOCAL_CHIRPSTACK_DIR) $(KAJIMA_BUS_DIR)
+	sudo rm -rf $(LOCAL_TTN_DIR) $(LOCAL_CHIRPSTACK_DIR) $(KAJIMA_BUS_DIR) $(KAJIMA_BUS_SRC_DIR)
 	rm -f $(BACKEND_FILE)
