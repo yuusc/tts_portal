@@ -321,7 +321,7 @@ $(KAJIMA_BUS_SRC_DIR): check-gh
 # WorkingDirectory/ExecStart と食い違わないようにしている (2026-09-18 追加)。
 define build_webapp_from_source
 	@echo ">>> ソースから $(KAJIMA_BIN) をビルドします (SOURCE=1)"; \
-	$(MAKE) -C $(KAJIMA_BUS_SRC_DIR)/bus-app build $(if $(ADMIN_USER),ADMIN_USER=$(ADMIN_USER)) $(if $(ADMIN_PASS),ADMIN_PASS=$(ADMIN_PASS)) && \
+	$(MAKE) -C $(KAJIMA_BUS_SRC_DIR)/bus-app build GOARCH=$(ARCH) $(if $(ADMIN_USER),ADMIN_USER=$(ADMIN_USER)) $(if $(ADMIN_PASS),ADMIN_PASS=$(ADMIN_PASS)) && \
 	mkdir -p $(KAJIMA_BUS_DIR)/static $(KAJIMA_BUS_DIR)/templates && \
 	cp $(KAJIMA_BUS_SRC_DIR)/bus-app/$(KAJIMA_BIN) $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN) && \
 	chmod +x $(KAJIMA_BUS_DIR)/$(KAJIMA_BIN) && \
