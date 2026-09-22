@@ -66,7 +66,16 @@ PORTAL_DIR     := $(ROOT_DIR)/portal
 PORTAL_SERVICE := portal
 
 # Host IP address (auto-detected)
+# 2026-09-22変更: 従来は `hostname -I | awk '{print $$1}'` で先頭のIPを取っていたが、
+# hostname -I は全インターフェースのIPを並べて返すため、Dockerの仮想インターフェース
+# (172.17.0.1 等) やVPNのIPが先頭に来ると、LANのIPではない値を掴んでしまう。
+# その値でTLS証明書のSANを作ると、実際のアクセス先IPと一致せずブラウザが拒否する。
+# デフォルトルートが通るインターフェースのIP(ip route get の src)を使うよう変更した。
+# 明示指定も可能: make ... HOST_IP=192.168.62.127
+HOST_IP ?= $(shell ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($$i=="src"){print $$(i+1); exit}}')
+ifeq ($(strip $(HOST_IP)),)
 HOST_IP := $(shell hostname -I | awk '{print $$1}')
+endif
 
 # tiles.zip: opt-in download (default: off)
 # Usage: make TILES=1 clone
